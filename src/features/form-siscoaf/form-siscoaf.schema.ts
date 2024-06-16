@@ -4,16 +4,27 @@ import {
   RelatedPersonRelationshipType,
 } from "@/api/related-people/related-people.schemas";
 import { dateToPtBrString } from "@/lib/date-methods";
-import { removeAccents } from "@/lib/string-methods";
+import { dateBrToIso, removeAccents } from "@/lib/string-methods";
 import { z } from "zod";
+import { produce } from "immer";
+import { isCNPJ, isCPF } from "validation-br";
+import { isBefore } from "date-fns";
 
 const REQUIRED_MESSAGE = "Obrigatório";
 
-const cpfCnpjSchema = z
-  .string()
-  .min(11)
-  .max(18)
-  .transform((arg) => arg.replace(/\D/g, ""));
+const cpfCnpjSchema = z.string().transform((arg, ctx) => {
+  const sanitizedValue = arg.replace(/\D/g, "");
+
+  if (!isCNPJ(sanitizedValue) && !isCPF(sanitizedValue)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "CPF/CNPJ inválido",
+    });
+    z.NEVER;
+  }
+
+  return sanitizedValue;
+});
 
 const envolvidoSchema = z.object({
   TpEnv: z.nativeEnum(RelatedPersonRelationshipType),
@@ -47,10 +58,37 @@ const ocorrenciaSchema = z.object({
     .min(2, REQUIRED_MESSAGE)
     .transform((arg) => removeAccents(arg.substring(0, 100)).toUpperCase()),
   AgUF: z.nativeEnum(UF).nullable(),
-  VlCred: z
-    .string()
-    .transform((arg) => arg.replace(/[^\d.,]/g, ""))
-    .refine((arg) => /^\d+([.,]\d+)*$/.test(arg)),
+  VlCred: z.string().transform((arg, ctx) => {
+    const decimalRegex = /^\d+([.,]\d+)*$/;
+    const sanitizedValue = arg.replace(/[^\d.,]/g, "");
+    const numericValue = Number(
+      sanitizedValue.replace(".", "").replace(",", "."),
+    );
+
+    switch (true) {
+      case !sanitizedValue:
+      case !decimalRegex.test(sanitizedValue): {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Valor inválido",
+        });
+        return z.NEVER;
+      }
+
+      case numericValue < 1: {
+        ctx.addIssue({
+          code: z.ZodIssueCode.too_small,
+          inclusive: true,
+          minimum: 1,
+          type: "number",
+        });
+        return z.NEVER;
+      }
+
+      default:
+        return sanitizedValue;
+    }
+  }),
   CPFCNPJCom: cpfCnpjSchema,
   Det: z
     .string()
@@ -91,6 +129,21 @@ export const formSiscoafSchema = z
       });
     }
 
+    if (
+      !!args.LOTE.OCORRENCIAS.OCORRENCIA.DtFim &&
+      !!args.LOTE.OCORRENCIAS.OCORRENCIA.DtInicio &&
+      isBefore(
+        new Date(dateBrToIso(args.LOTE.OCORRENCIAS.OCORRENCIA.DtFim)),
+        new Date(dateBrToIso(args.LOTE.OCORRENCIAS.OCORRENCIA.DtInicio)),
+      )
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Data final inferior à data inicial",
+        path: ["LOTE.OCORRENCIAS.OCORRENCIA.DtFim"],
+      });
+    }
+
     if (!args.LOTE.OCORRENCIAS.OCORRENCIA.AgUF) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -98,6 +151,14 @@ export const formSiscoafSchema = z
         path: ["LOTE.OCORRENCIAS.OCORRENCIA.AgUF"],
       });
     }
+  })
+  .transform((args) => {
+    const getNewArgs = produce((draft) => {
+      draft.LOTE.OCORRENCIAS["@ID"] =
+        args.LOTE.OCORRENCIAS.OCORRENCIA.NumOcorrencia;
+    }, args);
+
+    return getNewArgs();
   });
 
 export type IFormSiscoafRelatedPerson = z.input<typeof envolvidoSchema>;

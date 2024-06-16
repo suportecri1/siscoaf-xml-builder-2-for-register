@@ -1,14 +1,13 @@
-import "@/globals.css";
 import { FormSiscoaf } from "@/features/form-siscoaf";
-import { QueryClientProvider } from "@/config/providers/query-client.provider";
-import { Toaster } from "./components/ui/sonner";
+import { Toaster } from "@/components/ui/sonner";
+import { DefaultProvider } from "@/config/providers/default.provider";
 
 function App() {
   return (
-    <QueryClientProvider>
+    <DefaultProvider>
       <FormSiscoaf />
       <Toaster position="top-right" richColors />
-    </QueryClientProvider>
+    </DefaultProvider>
   );
 }
 
